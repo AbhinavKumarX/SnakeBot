@@ -1,0 +1,288 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <ESP32Servo.h>
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+#include "time.h"
+
+// --- CONFIGURATION ---
+const char *ssid = "Snakebot";
+const char *password = "12345678";
+const char *mqtt_server = "10.143.4.146"; // Your Hotspot IP
+
+const char *THIS_ESP_ID = "ESP_01";
+
+const int SERVO_PIN_1 = 18;
+const int SERVO_PIN_2 = 19;
+
+// --- MULTITASKING & QUEUE CONFIG ---
+#define MAX_QUEUE_SIZE 50
+
+struct ServoCommand
+{
+  unsigned long long timestamp;
+  int angle1;
+  int angle2;
+  bool isValid;
+};
+
+ServoCommand commandQueue[MAX_QUEUE_SIZE];
+volatile int queueHead = 0;
+volatile int queueTail = 0;
+volatile int queueCount = 0;
+portMUX_TYPE queueMux = portMUX_INITIALIZER_UNLOCKED;
+
+TaskHandle_t MqttTaskHandle;
+TaskHandle_t ServoOtaTaskHandle;
+
+// Flags for cross-task communication
+volatile bool isOTAUpdating = false;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+Servo servo1;
+Servo servo2;
+
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 0;
+
+// ================================================================
+//  HELPER FUNCTIONS
+// ================================================================
+
+unsigned long long getCurrentMillis()
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (unsigned long long)(tv.tv_sec) * 1000 + (unsigned long long)(tv.tv_usec) / 1000;
+}
+
+// ================================================================
+//  TASK 1: MQTT & WIFI (CORE 1)
+// ================================================================
+
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, payload, length);
+
+  if (error)
+  {
+    Serial.print("JSON Error: ");
+    Serial.println(error.f_str());
+    return;
+  }
+
+  if (doc["data"].containsKey(THIS_ESP_ID))
+  {
+    unsigned long long ts = doc["ts"];
+    int a1 = doc["data"][THIS_ESP_ID][0];
+    int a2 = doc["data"][THIS_ESP_ID][1];
+
+    portENTER_CRITICAL(&queueMux);
+    int nextTail = (queueTail + 1) % MAX_QUEUE_SIZE;
+    if (nextTail != queueHead)
+    {
+      commandQueue[queueTail].timestamp = ts;
+      commandQueue[queueTail].angle1 = a1;
+      commandQueue[queueTail].angle2 = a2;
+      commandQueue[queueTail].isValid = true;
+      queueTail = nextTail;
+      queueCount++;
+    }
+
+    portEXIT_CRITICAL(&queueMux);
+  }
+}
+
+void reconnectMQTT()
+{
+  while (!client.connected())
+  {
+    Serial.print("Connecting to MQTT (Core 1)...");
+    String clientId = "ESP32-" + String(THIS_ESP_ID) + "-";
+    clientId += String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str()))
+    {
+      Serial.println("Connected");
+      client.subscribe("servos/sync_command");
+    }
+    else
+    {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      delay(2000);
+    }
+  }
+}
+
+void mqttTask(void *parameter)
+{
+  // 1. Initialize WiFi (Must be done in the task that needs it first)
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected (Core 1).");
+
+  // --- IP address ---
+  Serial.print("My IP Address is: ");
+  Serial.println(WiFi.localIP());
+  // ----------------------
+
+  // 2. Sync Time (Required for Queue timestamp logic)
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  struct tm timeinfo;
+  Serial.print("Syncing Time");
+  while (!getLocalTime(&timeinfo))
+  {
+    Serial.print(".");
+    delay(100);
+  }
+  Serial.println("\nTime Synced!");
+
+  // 3. Setup MQTT
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(mqttCallback);
+
+  unsigned long lastHeartbeat = 0;
+
+  for (;;)
+  {
+    if (!client.connected())
+    {
+      reconnectMQTT();
+    }
+    client.loop(); // Handles MQTT keep-alive and callback
+
+    // Heartbeat to prove Core 1 is alive
+    if (millis() - lastHeartbeat > 5000)
+    {
+      lastHeartbeat = millis();
+      Serial.printf("[Core 1 MQTT] Alive. Queue Size: %d\n", queueCount);
+    }
+
+    delay(10);
+  }
+}
+
+// ================================================================
+//  TASK 2: SERVOS & OTA (CORE 0)
+// ================================================================
+
+void setupOTA()
+{
+  String hostname = "Snakebot-" + String(THIS_ESP_ID);
+  ArduinoOTA.setHostname(hostname.c_str());
+
+  ArduinoOTA.onStart([]()
+                     {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) type = "sketch";
+    else type = "filesystem";
+
+    Serial.println("Start updating " + type);
+    
+    // SAFETY: Set flag so we stop moving servos in the loop
+    isOTAUpdating = true; 
+    
+    servo1.detach();
+    servo2.detach(); });
+
+  ArduinoOTA.onEnd([]()
+                   {
+    Serial.println("\nEnd");
+    isOTAUpdating = false; });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                        { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+
+  ArduinoOTA.onError([](ota_error_t error)
+                     {
+    Serial.printf("Error[%u]: ", error);
+    // Resume operations on error
+    isOTAUpdating = false; 
+    servo1.attach(SERVO_PIN_1);
+    servo2.attach(SERVO_PIN_2); });
+
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready (Core 0)");
+}
+
+void servoAndOtaTask(void *parameter)
+{
+  // Wait for WiFi to be connected by the other task
+  Serial.println("Core 0 waiting for WiFi...");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(100);
+  }
+
+  // Once WiFi is up, we can start OTA
+  setupOTA();
+
+  servo1.attach(SERVO_PIN_1);
+  servo2.attach(SERVO_PIN_2);
+
+  for (;;)
+  {
+    // 1. Handle OTA Updates
+    ArduinoOTA.handle();
+
+    // 2. Servo Logic (Only if NOT updating)
+    if (!isOTAUpdating)
+    {
+      unsigned long long currentMs = getCurrentMillis();
+      bool shouldExecute = false;
+      ServoCommand cmd;
+
+      portENTER_CRITICAL(&queueMux);
+      if (queueHead != queueTail)
+      {
+        if (currentMs >= commandQueue[queueHead].timestamp)
+        {
+          cmd = commandQueue[queueHead];
+          shouldExecute = true;
+          queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
+          queueCount--;
+        }
+      }
+      portEXIT_CRITICAL(&queueMux);
+
+      if (shouldExecute)
+      {
+        servo1.write(cmd.angle1);
+        servo2.write(cmd.angle2);
+      }
+    }
+
+    delay(1); // Small delay to prevent watchdog trigger
+  }
+}
+
+// ================================================================
+//  MAIN SETUP & LOOP
+// ================================================================
+
+void setup()
+{
+  Serial.begin(115200);
+
+  // Core 1: MQTT & WiFi (The "Brain")
+  xTaskCreatePinnedToCore(mqttTask, "MqttTask", 10000, NULL, 1, &MqttTaskHandle, 1);
+
+  // Core 0: Servos & OTA (The "Muscle")
+  xTaskCreatePinnedToCore(servoAndOtaTask, "ServoOtaTask", 10000, NULL, 1, &ServoOtaTaskHandle, 0);
+}
+
+void loop()
+{
+  vTaskDelete(NULL);
+}
