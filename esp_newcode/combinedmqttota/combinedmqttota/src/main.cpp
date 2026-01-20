@@ -163,11 +163,11 @@ void mqttTask(void *parameter)
     client.loop(); // Handles MQTT keep-alive and callback
 
     // Heartbeat to prove Core 1 is alive
-    if (millis() - lastHeartbeat > 5000)
-    {
-      lastHeartbeat = millis();
-      Serial.printf("[Core 1 MQTT] Alive. Queue Size: %d\n", queueCount);
-    }
+    // if (millis() - lastHeartbeat > 5000)
+    // {
+    //   lastHeartbeat = millis();
+    //   Serial.printf("[Core 1 MQTT] Alive. Queue Size: %d\n", queueCount);
+    // }
 
     delay(10);
   }
@@ -258,6 +258,7 @@ void servoAndOtaTask(void *parameter)
 
       if (shouldExecute)
       {
+        Serial.printf("Executing Command: Angle1=%d, Angle2=%d at %llu ms\n", cmd.angle1, cmd.angle2, currentMs);
         servo1.write(cmd.angle1);
         servo2.write(cmd.angle2);
       }
