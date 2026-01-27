@@ -3,7 +3,7 @@ import json
 import paho.mqtt.client as mqtt
 
 # --- CONFIGURATION ---
-MQTT_BROKER = "10.143.4.146"  # CHANGE TO YOUR BROKER IP
+MQTT_BROKER = "10.60.247.146"  # CHANGE TO YOUR BROKER IP
 MQTT_PORT = 1883
 MQTT_TOPIC = "servos/sync_command"
 
@@ -41,10 +41,11 @@ except Exception as e:
 # Give it a moment to connect
 time.sleep(1)
 
-def send_movement(esp1_angles, esp2_angles, delay_offset=0):
+def send_movement(esp1_angles, esp2_angles, esp3_angles, delay_offset=0):
     """
     esp1_angles: [servo1, servo2]
     esp2_angles: [servo1, servo2]
+    esp3_angles: [servo1, servo2] 
     delay_offset: seconds from NOW to execute
     """
     current_time = time.time()
@@ -54,7 +55,8 @@ def send_movement(esp1_angles, esp2_angles, delay_offset=0):
         "ts": target_timestamp,
         "data": {
             "ESP_01": esp1_angles,
-            "ESP_02": esp2_angles
+            "ESP_02": esp2_angles,
+            "ESP_03": esp3_angles  
         }
     }
     
@@ -84,18 +86,21 @@ try:
                 print("✗ Please enter valid numbers")
             
         elif choice == '2':
-            print("\nSending 3 moves spaced 1 second apart...")
+            c = 0
+            v = 0
+            b = 0
+            for i in range(20):
+                print("\nSending 20 moves spaced 1 second apart...")
+                c+=9
+                v+=10
+                b+=11
+                clean_c = 180 - abs(c % 360 - 180)
+                clean_v = 180 - abs(v % 360 - 180)
+                clean_b = 180 - abs(b % 360 - 180)
+                # Move 1: t + 0.5s
+                send_movement([clean_c, clean_c], [clean_v,clean_v],[clean_b,clean_b], delay_offset= (i*0.02))
+                time.sleep(0.01)  # Small delay between publishes
             
-            # Move 1: t + 0.5s
-            send_movement([0, 0], [0, 0], delay_offset=0) 
-            time.sleep(0.1)  # Small delay between publishes
-            
-            # Move 2: t + 1.5s
-            send_movement([90, 90], [90, 90], delay_offset=0.05) 
-            time.sleep(0.1)
-            
-            # Move 3: t + 2.5s
-            send_movement([180, 180], [180, 180], delay_offset=0.1)
             print("✓ All moves queued")
             
         elif choice == '3':
