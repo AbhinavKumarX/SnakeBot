@@ -13,7 +13,7 @@ const char *ssid = "Snakebot";
 const char *password = "12345678";
 const char *mqtt_server = "10.60.247.146"; // Your Hotspot IP
 
-const char *THIS_ESP_ID = "ESP_03"; //  10.60.247.94
+const char *THIS_ESP_ID = "ESP_07"; // 10.60.247.25
 
 const int SERVO_PIN_1 = 18;
 const int SERVO_PIN_2 = 19;

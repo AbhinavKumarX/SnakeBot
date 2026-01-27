@@ -13,10 +13,21 @@ const char *ssid = "Snakebot";
 const char *password = "12345678";
 const char *mqtt_server = "10.60.247.146"; // Your Hotspot IP
 
-const char *THIS_ESP_ID = "ESP_03"; //  10.60.247.173
+const char *THIS_ESP_ID = "ESP_06"; // 10.60.247.37
 
-const int SERVO_PIN_1 = 18;
-const int SERVO_PIN_2 = 19;
+const int SERVO_PIN_1 = 32;
+const int SERVO_PIN_2 = 33;
+
+// --- Servo Configuration ---
+Servo servoH; // Horizontal servo
+Servo servoV; // Vertical servo
+
+// const int servoHPin = 32; // Horizontal servo on GPIO 32
+// const int servoVPin = 33; // Vertical servo on GPIO 33
+
+// Standard servo pulse widths (microseconds)
+int minUs = 500;  // Corresponds to 0 degrees
+int maxUs = 2500; // Corresponds to 180 degrees
 
 // --- MULTITASKING & QUEUE CONFIG ---
 #define MAX_QUEUE_SIZE 50
@@ -293,9 +304,17 @@ void setup()
 
   // Core 0: Servos & OTA (The "Muscle")
   xTaskCreatePinnedToCore(servoAndOtaTask, "ServoOtaTask", 10000, NULL, 1, &ServoOtaTaskHandle, 0);
+
+  // servoH.attach(servoHPin, minUs, maxUs);
+  // servoV.attach(servoVPin, minUs, maxUs);
+  // Set initial position to 90 degrees
+  Serial.println("Setting initial servo position to 90 degrees...");
+  servo1.write(90);
+  servo2.write(90);
 }
 
 void loop()
 {
+
   vTaskDelete(NULL);
 }
