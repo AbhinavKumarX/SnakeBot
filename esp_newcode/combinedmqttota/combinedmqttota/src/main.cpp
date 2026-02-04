@@ -11,9 +11,9 @@
 // --- CONFIGURATION ---
 const char *ssid = "Snakebot";
 const char *password = "12345678";
-const char *mqtt_server = "10.60.247.146"; // Your Hotspot IP
+const char *mqtt_server = "10.41.216.146"; // Your Hotspot IP
 
-const char *THIS_ESP_ID = "ESP_06"; // 10.60.247.37
+const char *THIS_ESP_ID = "ESP_07"; // 10.41.216.25
 
 const int SERVO_PIN_1 = 32;
 const int SERVO_PIN_2 = 33;
@@ -251,9 +251,14 @@ void servoAndOtaTask(void *parameter)
   // Once WiFi is up, we can start OTA
   setupOTA();
 
-  servo1.attach(SERVO_PIN_1);
-  servo2.attach(SERVO_PIN_2);
+  // 1. Attach with correct Min/Max Pulse Widths
+  servo1.attach(SERVO_PIN_1, minUs, maxUs);
+  servo2.attach(SERVO_PIN_2, minUs, maxUs);
 
+  // 2. NOW it is safe to set the initial position
+  Serial.println("Servos Attached. Moving to Home (90).");
+  servo1.write(90);
+  servo2.write(90);
   for (;;)
   {
     // 1. Handle OTA Updates
@@ -269,7 +274,7 @@ void servoAndOtaTask(void *parameter)
       portENTER_CRITICAL(&queueMux);
       if (queueHead != queueTail)
       {
-        if (currentMs >= commandQueue[queueHead].timestamp)
+        if (true) // TEMPORARY: Ignore timestamp for testing
         {
           cmd = commandQueue[queueHead];
           shouldExecute = true;
@@ -308,9 +313,6 @@ void setup()
   // servoH.attach(servoHPin, minUs, maxUs);
   // servoV.attach(servoVPin, minUs, maxUs);
   // Set initial position to 90 degrees
-  Serial.println("Setting initial servo position to 90 degrees...");
-  servo1.write(90);
-  servo2.write(90);
 }
 
 void loop()

@@ -96,7 +96,7 @@ colors =['red','blue']
 num_segments=noOfEsp+1#int(input("Enter the required number of segments: "))+1
 req_length = 1.37#cad measured value #float(input("Enter the required length between two servo joints: "))
 req_amplitude_z = 0.44#float(input("Enter the required amplitude in the z axis:"))
-req_amplitude_y = 0#float(input("Enter the required amplitude in the y axis:"))
+req_amplitude_y = 0.7#float(input("Enter the required amplitude in the y axis:"))
 A1=0
 num_path_points = 0
 R=req_length/2#radius of the virtual rolling joint approximate sphere
@@ -287,8 +287,9 @@ while(wantToSend):
                 row_data[3],
                 row_data[4],
                 row_data[5],
-                delay_offset=(tempcount * 0.3)
+                delay_offset=(tempcount * 0.25)
             )
+        time.sleep(0.05)  # Small delay between sends
         
         # Optional: Print what we just sent for debugging
         print(row_data)
