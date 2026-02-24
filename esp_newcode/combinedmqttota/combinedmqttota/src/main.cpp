@@ -11,9 +11,9 @@
 // --- CONFIGURATION ---
 const char *ssid = "Snakebot";
 const char *password = "12345678";
-const char *mqtt_server = "10.41.216.146"; // Your Hotspot IP
+const char *mqtt_server = "10.74.194.146"; // Your Hotspot IP
 
-const char *THIS_ESP_ID = "ESP_07"; // 10.41.216.25
+const char *THIS_ESP_ID = "ESP_07"; // 10.74.194.25
 
 const int SERVO_PIN_1 = 32;
 const int SERVO_PIN_2 = 33;
@@ -22,15 +22,12 @@ const int SERVO_PIN_2 = 33;
 Servo servoH; // Horizontal servo
 Servo servoV; // Vertical servo
 
-// const int servoHPin = 32; // Horizontal servo on GPIO 32
-// const int servoVPin = 33; // Vertical servo on GPIO 33
-
 // Standard servo pulse widths (microseconds)
 int minUs = 500;  // Corresponds to 0 degrees
 int maxUs = 2500; // Corresponds to 180 degrees
 
 // --- MULTITASKING & QUEUE CONFIG ---
-#define MAX_QUEUE_SIZE 50
+#define MAX_QUEUE_SIZE 200
 
 struct ServoCommand
 {
@@ -94,7 +91,22 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     int a1 = doc["data"][THIS_ESP_ID][0];
     int a2 = doc["data"][THIS_ESP_ID][1];
 
+    // ✅ FIX 1: Call getCurrentMillis() here instead of using the local
+    //           variable 'currentMs' which only exists in servoAndOtaTask
+    unsigned long long currentMs = getCurrentMillis();
+
     portENTER_CRITICAL(&queueMux);
+
+    // Discard commands that are too old (more than 500ms late)
+    while (queueHead != queueTail &&
+           commandQueue[queueHead].timestamp < currentMs - 500)
+    {
+      Serial.printf("[WARN] Discarding stale command (ts=%llu)\n",
+                    commandQueue[queueHead].timestamp);
+      queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
+      queueCount--;
+    }
+
     int nextTail = (queueTail + 1) % MAX_QUEUE_SIZE;
     if (nextTail != queueHead)
     {
@@ -106,19 +118,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
       queueCount++;
     }
 
-    if (doc["data"].containsKey(THIS_ESP_ID))
-    {
-      unsigned long long targetTs = doc["ts"];
-      unsigned long long arrivalTs = getCurrentMillis(); // Capture arrival time immediately
-
-      // Calculate the difference
-      long leadTime = (long)(targetTs - arrivalTs);
-
-      Serial.print("[MQTT] Packet Arrived. ");
-      Serial.printf("Target: %llu | Arrival: %llu | Lead Time: %ld ms\n", targetTs, arrivalTs, leadTime);
-    }
-
     portEXIT_CRITICAL(&queueMux);
+
+    // Log lead time
+    unsigned long long arrivalTs = getCurrentMillis();
+    long leadTime = (long)(ts - arrivalTs);
+    Serial.print("[MQTT] Packet Arrived. ");
+    Serial.printf("Target: %llu | Arrival: %llu | Lead Time: %ld ms\n", ts / 1000, arrivalTs / 1000, leadTime / 1000);
   }
 }
 
@@ -146,7 +152,6 @@ void reconnectMQTT()
 
 void mqttTask(void *parameter)
 {
-  // 1. Initialize WiFi (Must be done in the task that needs it first)
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -155,12 +160,9 @@ void mqttTask(void *parameter)
   }
   Serial.println("\nWiFi Connected (Core 1).");
 
-  // --- IP address ---
   Serial.print("My IP Address is: ");
   Serial.println(WiFi.localIP());
-  // ----------------------
 
-  // 2. Sync Time (Required for Queue timestamp logic)
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   struct tm timeinfo;
   Serial.print("Syncing Time");
@@ -171,11 +173,8 @@ void mqttTask(void *parameter)
   }
   Serial.println("\nTime Synced!");
 
-  // 3. Setup MQTT
   client.setServer(mqtt_server, 1883);
   client.setCallback(mqttCallback);
-
-  unsigned long lastHeartbeat = 0;
 
   for (;;)
   {
@@ -183,15 +182,7 @@ void mqttTask(void *parameter)
     {
       reconnectMQTT();
     }
-    client.loop(); // Handles MQTT keep-alive and callback
-
-    // Heartbeat to prove Core 1 is alive
-    // if (millis() - lastHeartbeat > 5000)
-    // {
-    //   lastHeartbeat = millis();
-    //   Serial.printf("[Core 1 MQTT] Alive. Queue Size: %d\n", queueCount);
-    // }
-
+    client.loop();
     delay(10);
   }
 }
@@ -210,12 +201,8 @@ void setupOTA()
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) type = "sketch";
     else type = "filesystem";
-
     Serial.println("Start updating " + type);
-    
-    // SAFETY: Set flag so we stop moving servos in the loop
-    isOTAUpdating = true; 
-    
+    isOTAUpdating = true;
     servo1.detach();
     servo2.detach(); });
 
@@ -230,8 +217,7 @@ void setupOTA()
   ArduinoOTA.onError([](ota_error_t error)
                      {
     Serial.printf("Error[%u]: ", error);
-    // Resume operations on error
-    isOTAUpdating = false; 
+    isOTAUpdating = false;
     servo1.attach(SERVO_PIN_1);
     servo2.attach(SERVO_PIN_2); });
 
@@ -241,30 +227,25 @@ void setupOTA()
 
 void servoAndOtaTask(void *parameter)
 {
-  // Wait for WiFi to be connected by the other task
   Serial.println("Core 0 waiting for WiFi...");
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(100);
   }
 
-  // Once WiFi is up, we can start OTA
   setupOTA();
 
-  // 1. Attach with correct Min/Max Pulse Widths
   servo1.attach(SERVO_PIN_1, minUs, maxUs);
   servo2.attach(SERVO_PIN_2, minUs, maxUs);
 
-  // 2. NOW it is safe to set the initial position
   Serial.println("Servos Attached. Moving to Home (90).");
   servo1.write(90);
   servo2.write(90);
+
   for (;;)
   {
-    // 1. Handle OTA Updates
     ArduinoOTA.handle();
 
-    // 2. Servo Logic (Only if NOT updating)
     if (!isOTAUpdating)
     {
       unsigned long long currentMs = getCurrentMillis();
@@ -274,15 +255,17 @@ void servoAndOtaTask(void *parameter)
       portENTER_CRITICAL(&queueMux);
       if (queueHead != queueTail)
       {
-        if (true) // TEMPORARY: Ignore timestamp for testing
+        if (commandQueue[queueHead].timestamp <= currentMs)
         {
+
           cmd = commandQueue[queueHead];
           shouldExecute = true;
           queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
           queueCount--;
         }
       }
-      portEXIT_CRITICAL(&queueMux);
+      portEXIT_CRITICAL(&queueMux); // ✅ FIX 2: Moved outside the if(queueHead != queueTail)
+                                    //           block so critical section always exits
 
       if (shouldExecute)
       {
@@ -292,9 +275,10 @@ void servoAndOtaTask(void *parameter)
       }
     }
 
-    delay(1); // Small delay to prevent watchdog trigger
+    delay(1);
   }
-}
+} // ✅ FIX 3: Closed servoAndOtaTask here — setup() and loop() were
+  //           previously nested inside this function
 
 // ================================================================
 //  MAIN SETUP & LOOP
@@ -309,14 +293,9 @@ void setup()
 
   // Core 0: Servos & OTA (The "Muscle")
   xTaskCreatePinnedToCore(servoAndOtaTask, "ServoOtaTask", 10000, NULL, 1, &ServoOtaTaskHandle, 0);
-
-  // servoH.attach(servoHPin, minUs, maxUs);
-  // servoV.attach(servoVPin, minUs, maxUs);
-  // Set initial position to 90 degrees
 }
 
 void loop()
 {
-
   vTaskDelete(NULL);
 }

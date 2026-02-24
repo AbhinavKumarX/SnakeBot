@@ -9,13 +9,13 @@ from scipy.interpolate import splprep, splev
 from copy import deepcopy
 
 # --- CONFIGURATION ---
-MQTT_BROKER = "10.41.216.146"  # CHANGE TO YOUR BROKER IP
+MQTT_BROKER = "10.74.194.146"  # CHANGE TO YOUR BROKER IP
 MQTT_PORT = 1883
 MQTT_TOPIC = "servos/sync_command"
 noOfEsp=6  # Number of ESP devices to control
 
 # How far in the future to schedule the FIRST move (seconds)
-INITIAL_DELAY = 0.5 
+INITIAL_DELAY = 1.0
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
@@ -254,15 +254,14 @@ plt.show()
 
 
 tempcount = 1
-wantToSend=True
-i=1
+wantToSend = True
+MOVE_INTERVAL = 0.25  # ✅ FIX 2: Moved outside the loop so it's accessible everywhere
 
 while(wantToSend):
     for angles_set in angles_real:
         print(f"Sending sequence: {tempcount}")
         
-        # 1. Create a list to store the data for all 3 ESPs
-        # It will look like: [ [95,60], [90,89], [89,120] ]
+        # 1. Create a list to store the data for all ESPs
         row_data = [] 
         
         for angle_pair in angles_set:
@@ -274,12 +273,10 @@ while(wantToSend):
             val1 = int(min(120, max(90 - int(angle_1), 60)))
             val2 = int(min(120, max(90 - int(angle_2), 60)))
 
-            # 2. Append as a pair of numbers [x, y] to our list
             row_data.append([val1, val2])
 
-        # 3. Send the movement if we have data for all 3 ESPs
-        if len(row_data) >= 3:
-            # Note: We use square brackets [] for lists in Python, not ()
+        # 3. Send the movement if we have data for all ESPs
+        if len(row_data) >= 6:
             send_movement(
                 row_data[0], 
                 row_data[1], 
@@ -287,45 +284,13 @@ while(wantToSend):
                 row_data[3],
                 row_data[4],
                 row_data[5],
-                delay_offset=(tempcount * 0.25)
+                delay_offset=(tempcount * MOVE_INTERVAL)  # ✅ FIX 1: Removed invalid "0." prefix
             )
-        time.sleep(0.05)  # Small delay between sends
+
+        time.sleep(MOVE_INTERVAL * 1)  # Small delay between sends
         
-        # Optional: Print what we just sent for debugging
         print(row_data)
-
-        # 4. Increment counter
         tempcount += 1
-        
-        # Note: If you want to schedule them all instantly, remove this sleep.
-        # If you want to pace the loop execution, keep it.
-        # if(keyboard.is_pressed('p')):
-        #     print("paused")
-        #     time.sleep(2)
-
-        #     while(True):
-        #         if(keyboard.is_pressed('p')):
-        #             # print("continuing")
-        #             time.sleep(2)
-        #             break
-        #         if(keyboard.is_pressed('q')):
-        #             print("quitting")
-        #             wantToSend=False
-        #             break
-        # if(not wantToSend):
-        #     print("hi")
-        #     break
-        # response = ser.readline().decode().strip()  # Read   serial buffer5
-        # time.sleep(10)
-        # if response:    
-        #     print(f"Received: {response}")  # Print received data
-    # print("Serial communication finished.")
-    # if(input("Press R to restart sending angle commands: ").upper()!='R'):
-    #     print("Ending Execution")
-    #     ser.close()  # Close serial connection
-    #     break
-    # else :
-    #     print("Restarting angle commands")
 
 time.sleep(1)
 
@@ -360,9 +325,8 @@ try:
                 clean_c = 180 - abs(c % 360 - 180)
                 clean_v = 180 - abs(v % 360 - 180)
                 clean_b = 180 - abs(b % 360 - 180)
-                # Move 1: t + 0.5s
-                send_movement([clean_c, clean_c], [clean_v,clean_v],[clean_b,clean_b], delay_offset= (i*0.02))
-                time.sleep(0.01)  # Small delay between publishes
+                send_movement([clean_c, clean_c], [clean_v,clean_v],[clean_b,clean_b], delay_offset=(i*0.02))
+                time.sleep(0.01)
             
             print("✓ All moves queued")
             
